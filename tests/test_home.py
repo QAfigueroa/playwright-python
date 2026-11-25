@@ -68,15 +68,10 @@ def bloquear_anuncios(page: Page):
     Bloquea las peticiones a servidores de anuncios, que a veces tapan la
     página y hacen fallar las pruebas sin que haya un error real.
     """
-    dominios = ["googlesyndication", "doubleclick", "googleadservices", "adservice"]
-
-    def filtrar(ruta):
-        if any(d in ruta.request.url for d in dominios):
-            ruta.abort()
-        else:
-            ruta.continue_()
-
-    page.route("**/*", filtrar)
+    dominios = re.compile(
+        r".*(?:googlesyndication|doubleclick|googleadservices|adservice).*"
+    )
+    page.route(dominios, lambda ruta: ruta.abort())
     yield
 
 
@@ -319,10 +314,16 @@ def test_28_eliminar_producto_del_carrito(page: Page):
     ir(page, "/products")
     agregar_al_carrito(page, 0)
     page.locator("#cartModal").get_by_role("link", name="View Cart").click()
-    # La eliminación se procesa de forma asíncrona en una petición del sitio.
-    with page.expect_response(re.compile(r"/delete_cart/\d+$")) as respuesta:
-        page.locator(".cart_quantity_delete").first.click()
-    assert respuesta.value.status == 200
+    # Espera a que cart.js registre el manejador antes de interactuar con el botón.
+    page.wait_for_function(
+        """() => {
+            const boton = document.querySelector('.cart_quantity_delete');
+            const eventos = window.jQuery && boton && window.jQuery._data(boton, 'events');
+            return Boolean(eventos && eventos.click && eventos.click.length);
+        }"""
+    )
+    page.locator(".cart_quantity_delete").first.click()
+    # La fila desaparece cuando el servidor termina la eliminación asíncrona.
     expect(page.locator("#cart_info_table tbody tr")).to_have_count(0, timeout=10000)
     expect(page.locator("#empty_cart")).to_be_visible()
 
